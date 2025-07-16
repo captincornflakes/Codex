@@ -1,9 +1,11 @@
 import tkinter as tk
-from tkinter import messagebox, simpledialog, ttk
+from tkinter import messagebox, simpledialog, ttk, filedialog
 import os
 import shutil
 import json
 from utils.settings import load_settings
+from utils.profile_transfer import export_profile, import_profile  # <-- Add this import
+import threading
 
 settings = load_settings()
 
@@ -37,12 +39,22 @@ class DocumenterApp:
 
         # Storage folders dropdown
         tk.Label(button_bar, text="Storage Folder:").pack(side="left")
-        self.folder_dropdown = ttk.Combobox(button_bar, textvariable=self.selected_folder, state="readonly", width=20)
+        self.folder_dropdown = ttk.Combobox(
+            button_bar,
+            textvariable=self.selected_folder,
+            state="readonly",
+            width=20
+        )
         self.folder_dropdown.pack(side="left", padx=2)
+        self.folder_dropdown.bind("<<ComboboxSelected>>", lambda e: [self.load_profile(), self.refresh_albums()])
 
         tk.Button(button_bar, text="New", command=self.new_storage_folder).pack(side="left", padx=2)
         tk.Button(button_bar, text="Load", command=self.load_profile).pack(side="left", padx=2)
         tk.Button(button_bar, text="Save", command=self.save_profile).pack(side="left", padx=2)
+
+        # --- Export and Import buttons ---
+        tk.Button(button_bar, text="Export", command=self.export_profile_gui).pack(side="left", padx=2)
+        tk.Button(button_bar, text="Import", command=self.import_profile_gui).pack(side="left", padx=2)
 
         # Albums dropdown
         tk.Label(button_bar, text="Albums:").pack(side="left", padx=(20,2))
@@ -50,9 +62,10 @@ class DocumenterApp:
             button_bar,
             textvariable=self.selected_album,
             state="readonly",
-            width=40  # doubled from 20 to 40 for longer album names
+            width=40
         )
         self.album_dropdown.pack(side="left", padx=2)
+        self.album_dropdown.bind("<<ComboboxSelected>>", lambda e: self.load_album())  # <-- Load album on change
 
         tk.Button(button_bar, text="New Album", command=self.new_album).pack(side="left", padx=2)
         tk.Button(button_bar, text="Get Albums", command=self.refresh_albums).pack(side="left", padx=2)
@@ -218,6 +231,9 @@ class DocumenterApp:
             else:
                 widget.delete(0, tk.END)
                 widget.insert(0, value)
+
+        # Also refresh albums for the loaded profile
+        self.refresh_albums()
 
     def save_profile(self):
         storage_dir = self.settings.get("storage_directory", "storage/")
@@ -420,3 +436,42 @@ class DocumenterApp:
             self.load_album()
         except Exception as e:
             messagebox.showerror("Error", f"Failed to upload file: {e}")
+
+    def export_profile_gui(self):
+        storage_dir = self.settings.get("storage_directory", "storage/")
+        folder = self.selected_folder.get()
+        if not folder:
+            messagebox.showwarning("Warning", "No storage folder selected.")
+            return
+        export_path = filedialog.asksaveasfilename(
+            title="Export Profile as ZIP",
+            defaultextension=".zip",
+            initialfile=f"{folder}.zip",
+            filetypes=[("Zip Files", "*.zip")]
+        )
+        if export_path:
+            def do_export():
+                try:
+                    export_profile(storage_dir, folder, export_path)
+                    self.master.after(0, lambda: messagebox.showinfo("Export", f"Profile exported to {export_path}"))
+                except Exception as e:
+                    self.master.after(0, lambda: messagebox.showerror("Export Error", f"Failed to export profile: {e}"))
+            threading.Thread(target=do_export, daemon=True).start()
+
+    def import_profile_gui(self):
+        storage_dir = self.settings.get("storage_directory", "storage/")
+        import_zip_path = filedialog.askopenfilename(
+            title="Import Profile from ZIP",
+            filetypes=[("Zip Files", "*.zip")]
+        )
+        if not import_zip_path:
+            return
+        folder_name = simpledialog.askstring("Import Profile", "Enter folder name for imported profile (leave blank to use zip name):")
+        def do_import():
+            try:
+                imported_folder = import_profile(storage_dir, import_zip_path, folder_name if folder_name else None)
+                self.master.after(0, lambda: messagebox.showinfo("Import", f"Profile imported to {imported_folder}"))
+                self.master.after(0, self.refresh_storage_folders)
+            except Exception as e:
+                self.master.after(0, lambda: messagebox.showerror("Import Error", f"Failed to import profile: {e}"))
+        threading.Thread(target=do_import, daemon=True).start()
